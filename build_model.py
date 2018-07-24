@@ -7,8 +7,9 @@ import keras.backend as K
 
 import tensorflow as tf
 
+# convenient convolution wrapper for modeling
 def Dropout_Conv1D(layer, n_layer, ks, padding, activation, dropout_prob):
-    x = Conv1D(256, ks, padding="same", activation="relu", name="channel_{}".format(n_layer))(layer)
+    x = Conv1D(256, ks, padding=padding, activation=activation, name="channel_{}".format(n_layer))(layer)
     x = Dropout(dropout_prob)(x)
     return x
 
