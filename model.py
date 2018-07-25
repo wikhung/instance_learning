@@ -103,3 +103,28 @@ class InstanceLearning(object):
 
     def decaying_lr(self, epoch):
         return self.learning_rate / (2 ** epoch)
+
+    def demo(self):
+        review = input("Enter the reviews here:")
+        processed_review = utils.remove_symbols(review)
+        tokenized_review = utils.review_tokenizer(processed_review, self.word2idx, self.max_sent,
+                                                  self.max_len, self.vocab_size + 1)
+        mask_mat = np.sum(tokenized_reviews, axis=-1).reshape(-1, self.max_sent, 1)
+        mask_mat[mask_mat > 0] = 1
+
+        sent_sentiment_pred = self.sent_sentiment_model.predict([tokenized_review, mask_mat])
+
+
+        #print("Review ratings: {}".format(labels.iloc[i]))
+        for s_i, sent in enumerate(tokenized_review[:self.max_sent]):
+            sent_pred = sent_sentiment_pred[s_i]
+
+            if sent_pred == 0:
+                break
+            elif sent_pred > 0.7:
+                print('\033[1;42m{}\033[1;m'.format(sent))
+            elif sent_pred < 0.3:
+                print('\033[1;41m{}\033[1;m'.format(sent))
+            else:
+                print('\033[1;47m{}\033[1;m'.format(sent))
+        print("\n")
