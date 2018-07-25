@@ -2,12 +2,13 @@ import pandas as pd
 import numpy as np
 import os
 import utils
+import json
 from collections import Counter
 from nltk import tokenize
 from build_model import build_sent_encoder, build_model, custom_loss_wrapper
 import logging
 
-from keras.models import Model
+from keras.models import Model, model_from_json
 from keras.optimizers import Adam
 from keras.callbacks import EarlyStopping, LearningRateScheduler, ModelCheckpoint
 
@@ -30,8 +31,8 @@ class InstanceLearning(object):
     def read_review_data(self, nrows = None):
         logger.info("Read in {} yelp reviews".format(nrows if nrows is not None else "all"))
         df = pd.read_csv(os.path.join("data", "yelp_reviews", "yelp_review.csv"), nrows=nrows)
-
         df = df[["text", "stars"]]
+
         # Remove neutral reviews
         df = df[df['stars'] != 3]
 
@@ -49,6 +50,8 @@ class InstanceLearning(object):
         # Only keep the top n words to build a word2idx dictionary
         # 0 will be reserved for padding
         self.word2idx = {k: i + 1 for i, (k, _) in enumerate(vocab.most_common(self.vocab_size))}
+        with open(os.path.join("demo", "word2idx.dict"), "w") as f:
+            f.write(json.dumps(self.word2idx))
 
         # tokenized the reviews; UNKNOWN_TOKEN = vocab_size + 1
         self.tokenized_reviews = self.reviews.apply(lambda r: utils.review_tokenizer(r, self.word2idx, self.max_sent,
@@ -88,6 +91,17 @@ class InstanceLearning(object):
         self.model=model
         self.sent_sentiment_model = sent_sentiment_model
 
+    def load_saved_model(self):
+        # load the saved word2idx dictionary
+        self.word2idx = json.loads(open(os.path.join("demo", "word2idx.dict")).read())
+        # load the keras model
+        self.model = model_from_json(open(os.path.join("checkpoint", "model.json")).read())
+        self.model.load_weights(os.path.join("checkpoint", "weights.10-0.41.hdf5"))
+        # create the sentence sentiment classification model
+        sent_sentiment_layer = self.model.get_layer("masked_sent_sentiment")
+        self.sent_sentiment_model = Model(inputs=self.model.input,
+                                          outputs=sent_sentiment_layer.output)
+
     def train(self, epochs, save_weights = False):
         lr_scheduler = LearningRateScheduler(self.decaying_lr)
         earlystopping = EarlyStopping(patience=2)
@@ -97,34 +111,49 @@ class InstanceLearning(object):
             model_check_pt = ModelCheckpoint(os.path.join("checkpoint", "weights.{epoch:02d}-{val_loss:.2f}.hdf5"))
             callbacks.append(model_check_pt)
 
-        self.model.fit([self.tokenized_reviews, self.mask_mat],
-                       self.labels, self.batch_size, validation_split=0.2,
-                       epochs=epochs, callbacks=callbacks)
+        for e in range(epochs):
+            self.model.fit([self.tokenized_reviews, self.mask_mat],
+                           self.labels, self.batch_size, validation_split=0.2,
+                           epochs=e, callbacks=callbacks)
+            if save_weights:
+                model_json = self.model.to_json()
+                with open(os.path.join("checkpoint", "model.json"), "w") as f:
+                    f.write(model_json)
+                self.model.save_weights("weights.{}.hdf5".format(e))
 
     def decaying_lr(self, epoch):
         return self.learning_rate / (2 ** epoch)
 
     def demo(self):
         review = input("Enter the reviews here:")
+
+        splitted_review = tokenize.sent_tokenize(review)
         processed_review = utils.remove_symbols(review)
         tokenized_review = utils.review_tokenizer(processed_review, self.word2idx, self.max_sent,
                                                   self.max_len, self.vocab_size + 1)
-        mask_mat = np.sum(tokenized_reviews, axis=-1).reshape(-1, self.max_sent, 1)
+        tokenized_review = tokenized_review.reshape(-1, self.max_sent, self.max_len)
+        mask_mat = np.sum(tokenized_review, axis=-1).reshape(-1, self.max_sent, 1)
         mask_mat[mask_mat > 0] = 1
 
         sent_sentiment_pred = self.sent_sentiment_model.predict([tokenized_review, mask_mat])
+        overall_preds = self.model.predict([tokenized_review, mask_mat])
 
-
-        #print("Review ratings: {}".format(labels.iloc[i]))
-        for s_i, sent in enumerate(tokenized_review[:self.max_sent]):
-            sent_pred = sent_sentiment_pred[s_i]
-
-            if sent_pred == 0:
-                break
-            elif sent_pred > 0.7:
-                print('\033[1;42m{}\033[1;m'.format(sent))
-            elif sent_pred < 0.3:
-                print('\033[1;41m{}\033[1;m'.format(sent))
+        print('\n')
+        for r_i, review in enumerate(tokenized_review):
+            overall_pred = overall_preds[r_i]
+            if overall_pred > 0.5:
+                print('This review is \033[1;42m{}\033[1;m'.format("positive"))
             else:
-                print('\033[1;47m{}\033[1;m'.format(sent))
-        print("\n")
+                print('This review is \033[1;41m{}\033[1;m'.format("negative"))
+            print('\n')
+            for s_i, sent in enumerate(splitted_review[:self.max_sent]):
+                sent_pred = sent_sentiment_pred[r_i][s_i]
+
+                if sent_pred == 0:
+                    break
+                elif sent_pred > 0.5:
+                    print('\033[1;42m{}\033[1;m'.format(sent))
+                elif sent_pred < 0.5:
+                    print('\033[1;41m{}\033[1;m'.format(sent))
+                else:
+                    print('\033[1;47m{}\033[1;m'.format(sent))

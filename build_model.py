@@ -15,22 +15,29 @@ def Dropout_Conv1D(layer, n_layer, ks, padding, activation, dropout_prob):
 
 def build_sent_encoder(max_num_words, max_num_sent, vocab_size, dropout_prob, embedding_dim, embedding_mat,
                      embedding_trainable):
+
     sent = Input((max_num_words,), name="sent_input")
     # vocab size + 2 for 0 padding and UNKNOWN TOKEN
     embed = Embedding(vocab_size + 2, embedding_dim, weights=[embedding_mat], trainable=embedding_trainable,
                       name="sent_embed")(sent)
+
+    # Append multiple n-gram like filters together
     channels = [Dropout_Conv1D(embed, i, ks, "same", "relu", dropout_prob) for i, ks in enumerate([2, 3, 4, 6])]
     x = Concatenate()(channels)
+
+    # Couple Convolution-MaxPooling-Dropout block
     x = Conv1D(512, 5, padding="same", activation="relu")(x)
     x = MaxPooling1D(2)(x)
     x = Dropout(dropout_prob)(x)
     x = Conv1D(512, 5, padding="same", activation="relu", kernel_regularizer=regularizers.l2(0.01))(x)
     x = MaxPooling1D(2)(x)
     x = Dropout(dropout_prob)(x)
+    # Global MaxPooling for the last layer
     x = GlobalMaxPooling1D()(x)
     x = Dropout(dropout_prob)(x)
     sent_encode = x
 
+    # return the sentence encoder
     sent_encoder = Model(inputs=sent, outputs=sent_encode)
     return sent_encoder
 
@@ -38,18 +45,20 @@ def build_model(sent_encoder, max_num_words, max_num_sent, dropout_prob):
     review = Input((max_num_sent, max_num_words))
     mask = Input((max_num_sent, 1))
 
+    # Stitch the sentence encoder together
     encoded_reviews = TimeDistributed(sent_encoder)(review)
     encoded_reviews = Dropout(dropout_prob)(encoded_reviews)
 
     # predictions on sentence sentiments
     y_hat = Dense(1, activation="sigmoid", name="sent_sentiment")(encoded_reviews)
+    # multiply the mask to remove padded sentences from prediction
     y_hat = Multiply(name="masked_sent_sentiment")([y_hat, mask])
 
+    # use average sentence predictions as the overall review predictions
     sent_avg_out = Lambda(lambda x: K.sum(x[0], axis=[-2]) / K.sum(x[1], axis=[-2]),
                           name="sent_agg_pred")([y_hat, mask])
 
     model = Model(inputs=[review, mask], outputs=sent_avg_out)
-
     return model, encoded_reviews, y_hat
 
 # Pairwise sentence similarity for a batch
@@ -85,6 +94,6 @@ def custom_loss_wrapper(encoded_reviews, y_hat, batch_size, l, a):
         ent_loss = binary_crossentropy(y_true, y_pred)
         ent_loss = K.reshape(ent_loss, (-1, 1))
         sim_loss = custom_sim_loss(encoded_reviews, y_hat, batch_size)
-        sim_loss = K.reshape(ent_loss, (-1, 1))
+        sim_loss = K.reshape(sim_loss, (-1, 1))
         return (l * ent_loss) +  (a * sim_loss)
     return loss
