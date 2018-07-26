@@ -96,7 +96,7 @@ class InstanceLearning(object):
         self.word2idx = json.loads(open(os.path.join("demo", "word2idx.dict")).read())
         # load the keras model
         self.model = model_from_json(open(os.path.join("checkpoint", "model.json")).read())
-        self.model.load_weights(os.path.join("checkpoint", "weights.10-0.41.hdf5"))
+        self.model.load_weights(os.path.join("checkpoint", "weights.10-0.14.hdf5"))
         # create the sentence sentiment classification model
         sent_sentiment_layer = self.model.get_layer("masked_sent_sentiment")
         self.sent_sentiment_model = Model(inputs=self.model.input,
@@ -108,21 +108,40 @@ class InstanceLearning(object):
 
         callbacks = [lr_scheduler, earlystopping]
         if save_weights:
+            # Save the model structure
+            model_json = self.model.to_json()
+            with open(os.path.join("checkpoint", "model.json"), "w") as f:
+                f.write(model_json)
+            # call back for saving the model weights
             model_check_pt = ModelCheckpoint(os.path.join("checkpoint", "weights.{epoch:02d}-{val_loss:.2f}.hdf5"))
             callbacks.append(model_check_pt)
 
-        for e in range(epochs):
-            self.model.fit([self.tokenized_reviews, self.mask_mat],
-                           self.labels, self.batch_size, validation_split=0.2,
-                           epochs=e, callbacks=callbacks)
-            if save_weights:
-                model_json = self.model.to_json()
-                with open(os.path.join("checkpoint", "model.json"), "w") as f:
-                    f.write(model_json)
-                self.model.save_weights("weights.{}.hdf5".format(e))
+        self.model.fit([self.tokenized_reviews, self.mask_mat],
+                       self.labels, self.batch_size, validation_split=0.2,
+                       epochs=epochs, callbacks=callbacks)
 
     def decaying_lr(self, epoch):
         return self.learning_rate / (2 ** epoch)
+
+    def load_validation_data(self, nrows):
+        predictions_by_category ={}
+        df = pd.read_csv(os.path.join("data", "yelp_reviews", "yelp_review.csv"), nrows=nrows)
+        df = df[["text", "stars"]]
+
+        for star in range(1,6):
+            tmp = df[df['stars'] == star]
+            test_reviews = tmp["text"]
+            self.test_reviews = test_reviews.apply(lambda s: utils.remove_symbols(s))
+
+            tokenized_reviews = self.test_reviews.apply(lambda s: utils.review_tokenizer(s, self.word2idx, self.max_sent,
+                                                                                         self.max_len, self.vocab_size + 1))
+            tokenized_reviews = np.stack(tokenized_reviews.values, axis=0)
+            mask_mat = np.sum(tokenized_reviews, axis=-1).reshape(-1, self.max_sent, 1)
+            mask_mat[mask_mat > 0] = 1
+
+            predictions_by_category[star] = self.model.predict([tokenized_reviews, mask_mat])
+        return predictions_by_category
+
 
     def demo(self):
         review = input("Enter the reviews here:")

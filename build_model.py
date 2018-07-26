@@ -93,7 +93,7 @@ def custom_loss_wrapper(encoded_reviews, y_hat, batch_size, l, a):
     def loss(y_true, y_pred):
         ent_loss = binary_crossentropy(y_true, y_pred)
         ent_loss = K.reshape(ent_loss, (-1, 1))
-        sim_loss = custom_sim_loss(encoded_reviews, y_hat, batch_size)
-        sim_loss = K.reshape(sim_loss, (-1, 1))
-        return (l * ent_loss) +  (a * sim_loss)
+        #sim_loss = custom_sim_loss(encoded_reviews, y_hat, batch_size)
+        #sim_loss = K.reshape(sim_loss, (-1, 1))
+        return (l * ent_loss)# +  (a * sim_loss)
     return loss
