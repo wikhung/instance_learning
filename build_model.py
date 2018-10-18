@@ -1,6 +1,6 @@
 from keras.models import Model
-from keras.layers import Input, Embedding, TimeDistributed, Dense, Lambda, Concatenate, Multiply
-from keras.layers import Conv1D, MaxPooling1D, MaxPooling2D, Dropout, GlobalMaxPooling1D
+from keras.layers import Input, Embedding, TimeDistributed, Flatten, Dense, Lambda, Reshape, Concatenate, Multiply
+from keras.layers import Conv1D, MaxPooling1D, Dropout, GlobalMaxPooling1D, Activation
 from keras.losses import binary_crossentropy
 from keras import regularizers
 import keras.backend as K
@@ -40,24 +40,29 @@ def build_sent_encoder(max_num_words, max_num_sent, vocab_size, dropout_prob, em
     sent_encoder = Model(inputs=sent, outputs=sent_encode)
     return sent_encoder
 
+
 def build_model(sent_encoder, max_num_words, max_num_sent, dropout_prob):
     review = Input((max_num_sent, max_num_words))
-    mask = Input((max_num_sent, 1))
+    mask = Input((max_num_sent, 1), name='mask')
 
-    # Stitch the sentence encoder together
     encoded_reviews = TimeDistributed(sent_encoder)(review)
     encoded_reviews = Dropout(dropout_prob)(encoded_reviews)
 
-    # predictions on sentence sentiments
-    y_hat = Dense(1, activation="sigmoid", name="sent_sentiment")(encoded_reviews)
-    # multiply the mask to remove padded sentences from prediction
-    y_hat = Multiply(name="masked_sent_sentiment")([y_hat, mask])
+    attention = Dense(1, activation='tanh')(encoded_reviews)
+    attention = Dense(1)(attention)
+    attention = Flatten()(attention)
+    attention = Activation('softmax')(attention)
+    attention = Reshape((-1, 1), name='attention')(attention)
 
-    # use average sentence predictions as the overall review predictions
-    sent_avg_out = Lambda(lambda x: K.sum(x[0], axis=[-2]) / K.sum(x[1], axis=[-2]),
-                          name="sent_agg_pred")([y_hat, mask])
+    # prediction on sentence sentiments
+    y_hat = Dense(1, activation="sigmoid", name="sent_sentiment")(encoded_reviews)
+    y_hat = Multiply(name="masked_sent_sentiment")([y_hat, mask])
+    y_hat = Multiply()([y_hat, attention])
+    # sent_avg_out = Lambda(lambda x: K.sum(x[0], axis=[-2]) / K.sum(x[1], axis=[-2]), name="sent_agg_pred")([y_hat, mask])
+    sent_avg_out = Lambda(lambda x: K.sum(x, axis=-2), name="sent_agg_pred")(y_hat)
 
     model = Model(inputs=[review, mask], outputs=sent_avg_out)
+
     return model, encoded_reviews, y_hat
 
 # pairwise difference
