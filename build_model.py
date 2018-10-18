@@ -15,7 +15,6 @@ def Dropout_Conv1D(layer, n_layer, ks, padding, activation, dropout_prob):
 
 def build_sent_encoder(max_num_words, max_num_sent, vocab_size, dropout_prob, embedding_dim, embedding_mat,
                      embedding_trainable):
-
     sent = Input((max_num_words,), name="sent_input")
     # vocab size + 2 for 0 padding and UNKNOWN TOKEN
     embed = Embedding(vocab_size + 2, embedding_dim, weights=[embedding_mat], trainable=embedding_trainable,
@@ -61,39 +60,35 @@ def build_model(sent_encoder, max_num_words, max_num_sent, dropout_prob):
     model = Model(inputs=[review, mask], outputs=sent_avg_out)
     return model, encoded_reviews, y_hat
 
-# Pairwise sentence similarity for a batch
+# pairwise difference
 def pairwise_dist(x):
-    new_shape = K.int_shape(x)[2:]
-    x = K.reshape(x, (-1,) + new_shape)
-    x1 = K.expand_dims(x, len(new_shape) - 1)
-    x2 = K.expand_dims(x, len(new_shape))
-    sq_diff = K.square(x1 - x2)
-    c = K.sqrt(K.sum(sq_diff, axis = -1))
-    c = c / (2 * (0.5 ** 2))
+    encoding_len = K.int_shape(x)[-1]
+    x1 = K.reshape(x, (-1, encoding_len))
+    x2 = K.reshape(x1, (-1, 1, encoding_len))
+    l2_norm = K.sqrt(K.maximum(K.sum(K.square(x1 - x2), axis=-1), K.epsilon()))
+    c = l2_norm
     sims = K.exp(-c)
-    return tf.matrix_band_part(sims, -1, 0)
+    return sims
 
-# Pairwise prediction difference for a batch
+# prediction difference
 def y_derivative(y):
-    new_shape = K.int_shape(y)[2:]
-    y = K.reshape(y, (-1,) + new_shape)
-    y1 = K.expand_dims(y, len(new_shape) - 1)
-    y2 = K.expand_dims(y, len(new_shape))
-    sq_diff = K.square(y1 - y2)
-    return tf.matrix_band_part(sq_diff, -1, 0)
+    y1 = K.reshape(y, (-1,))
+    y2 = K.reshape(y1, (-1, 1))
+    sq_diff = K.maximum(K.square(y1 - y2), K.epsilon())
+    return sq_diff
 
 # similarity loss function
-def custom_sim_loss(encoded_reviews, y_hat, batch_size):
+def custom_sim_loss(encoded_reviews, y_hat, batch_size, num_sent):
     sims, pred_sims = pairwise_dist(encoded_reviews), y_derivative(y_hat)
-    loss = K.sum(K.dot(sims, pred_sims)) / (batch_size ** 2)
+    loss = K.sum(tf.multiply(sims, pred_sims))  / ((batch_size * num_sent) ** 2)
     return loss
 
-# Full custom loss function
-def custom_loss_wrapper(encoded_reviews, y_hat, batch_size, l, a):
+# Full custome loss function
+def custom_loss_wrapper(encoded_reviews, y_hat, batch_size, num_sent, l, a):
     def loss(y_true, y_pred):
         ent_loss = binary_crossentropy(y_true, y_pred)
-        ent_loss = K.reshape(ent_loss, (-1, 1))
-        #sim_loss = custom_sim_loss(encoded_reviews, y_hat, batch_size)
-        #sim_loss = K.reshape(sim_loss, (-1, 1))
-        return (l * ent_loss)# +  (a * sim_loss)
+        sim_loss = custom_sim_loss(encoded_reviews, y_hat, batch_size, num_sent)
+        return sim_loss + (l * ent_loss)
+    return loss
+t_loss) +  (a * sim_loss)
     return loss
